@@ -56,11 +56,19 @@ export interface PlacedObject {
   height: number
 }
 
+export interface SnapRef {
+  entityId: string
+  entityType: 'shape' | 'object'
+  vertexIndex: number  // index into rawPoints for shapes; 0 = center for objects
+}
+
 export interface Measurement {
   id: string
   p1: Point
   p2: Point
   customYards: number | null  // null = derived from pixel distance
+  p1Snap?: SnapRef
+  p2Snap?: SnapRef
 }
 
 export interface HoleMetadata {
@@ -69,3 +77,26 @@ export interface HoleMetadata {
 }
 
 export type EntityType = 'shape' | 'object' | 'measurement'
+
+export interface Hole {
+  id: string
+  metadata: HoleMetadata
+  shapes: Shape[]
+  objects: PlacedObject[]
+  measurements: Measurement[]
+}
+
+export interface CourseLayout {
+  holeId: string
+  x: number
+  y: number
+  rotation: number
+  scale: number
+}
+
+export interface Course {
+  id: string
+  name: string
+  holes: Hole[]
+  layout: CourseLayout[]
+}

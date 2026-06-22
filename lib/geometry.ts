@@ -1,4 +1,9 @@
-import type { Point, Shape, PlacedObject } from '@/types/drawing'
+import type { Point, Shape, PlacedObject, SnapRef } from '@/types/drawing'
+
+export interface SnapResult {
+  point: Point
+  ref: SnapRef
+}
 
 export interface BBox {
   minX: number; minY: number; maxX: number; maxY: number
@@ -62,33 +67,34 @@ export function rotatePoints(points: Point[], cx: number, cy: number, angleDeg: 
 // Snap threshold in px
 const SNAP_THRESHOLD = 18
 
-export function snapToNearestVertex(
+// Returns the nearest snappable point and a reference to which entity/vertex it belongs to.
+// Returns null if nothing is within the snap threshold.
+export function findSnap(
   cursor: Point,
   shapes: Shape[],
   objects: PlacedObject[],
-): Point | null {
-  let best: Point | null = null
+): SnapResult | null {
+  let best: SnapResult | null = null
   let bestDist = SNAP_THRESHOLD
 
   for (const shape of shapes) {
-    for (const p of shape.rawPoints) {
+    for (let i = 0; i < shape.rawPoints.length; i++) {
+      const p = shape.rawPoints[i]
       const d = dist(cursor, p)
-      if (d < bestDist) { bestDist = d; best = p }
+      if (d < bestDist) {
+        bestDist = d
+        best = { point: p, ref: { entityId: shape.id, entityType: 'shape', vertexIndex: i } }
+      }
     }
   }
 
-  // Also snap to object corners / centers
+  // Snap to object centers (vertexIndex 0 = center)
   for (const obj of objects) {
-    const corners: Point[] = [
-      { x: obj.x, y: obj.y },
-      { x: obj.x - obj.width / 2, y: obj.y - obj.height / 2 },
-      { x: obj.x + obj.width / 2, y: obj.y - obj.height / 2 },
-      { x: obj.x - obj.width / 2, y: obj.y + obj.height / 2 },
-      { x: obj.x + obj.width / 2, y: obj.y + obj.height / 2 },
-    ]
-    for (const p of corners) {
-      const d = dist(cursor, p)
-      if (d < bestDist) { bestDist = d; best = p }
+    const center: Point = { x: obj.x, y: obj.y }
+    const d = dist(cursor, center)
+    if (d < bestDist) {
+      bestDist = d
+      best = { point: center, ref: { entityId: obj.id, entityType: 'object', vertexIndex: 0 } }
     }
   }
 
