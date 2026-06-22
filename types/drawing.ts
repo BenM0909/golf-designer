@@ -32,3 +32,40 @@ export interface Shape {
   isClosed: boolean
   fillType: FillType
 }
+
+export type ObjectType = 'teebox' | 'pin'
+
+// Default sizes in px (scale: 3px = 1 yard, placeholder until calibration)
+export const OBJECT_DEFAULTS: Record<ObjectType, { width: number; height: number }> = {
+  teebox: { width: 36, height: 54 },   // ~12x18 yards
+  pin:    { width: 16, height: 16 },
+}
+
+export const OBJECT_COLORS: Record<ObjectType, string> = {
+  teebox: '#d4a96a',
+  pin:    '#e53e3e',
+}
+
+export interface PlacedObject {
+  id: string
+  objectType: ObjectType
+  x: number        // center
+  y: number        // center
+  rotation: number // degrees
+  width: number
+  height: number
+}
+
+export interface Measurement {
+  id: string
+  p1: Point
+  p2: Point
+  customYards: number | null  // null = derived from pixel distance
+}
+
+export interface HoleMetadata {
+  holeNumber: number
+  par: number
+}
+
+export type EntityType = 'shape' | 'object' | 'measurement'
