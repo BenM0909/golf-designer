@@ -550,11 +550,14 @@ export default function DrawingCanvas() {
               style={{ cursor: toolMode === 'erase' ? 'not-allowed' : toolMode === 'select' ? 'move' : 'default' }}
               onPointerEnter={() => (toolMode === 'erase' || toolMode === 'select') && setHoverEntityId(m.id)}
               onPointerLeave={() => setHoverEntityId(null)}
-              onPointerDown={e => toolMode === 'select' && handleMoveStart(e, 'measurement', m.id)}
+              onPointerDown={e => {
+                if (toolMode === 'select') handleMoveStart(e, 'measurement', m.id)
+                else e.stopPropagation() // prevent canvas from placing a new measure point on click
+              }}
               onClick={e => {
                 if (toolMode === 'erase') { eraseEntity(m.id, 'measurement', e); return }
                 if (toolMode === 'select') { e.stopPropagation(); setSelectedId(m.id); setSelectedType('measurement'); return }
-                // Click in any other mode → open edit input
+                // Any other mode (draw, measure, place) → open edit input
                 e.stopPropagation()
                 setEditingMeasId(m.id); setEditingMeasValue(String(yds))
               }}
@@ -575,6 +578,7 @@ export default function DrawingCanvas() {
                     onBlur={commitMeasurementEdit}
                     onKeyDown={e => { if (e.key === 'Enter') commitMeasurementEdit(); if (e.key === 'Escape') { setEditingMeasId(null) } }}
                     className="w-full h-full text-center text-xs border border-amber-400 rounded px-1 bg-white"
+                    onPointerDown={e => e.stopPropagation()}
                     onClick={e => e.stopPropagation()}
                   />
                 </foreignObject>
