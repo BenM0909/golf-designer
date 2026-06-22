@@ -14,12 +14,10 @@ const STROKE_OPTIONS = {
 }
 
 // Threshold (px) within which start and end points are treated as "the same" for auto-closing.
-const CLOSE_THRESHOLD_PX = 40
-// Minimum number of raw points before we bother checking for closure.
+export const CLOSE_THRESHOLD_PX = 40
+// Minimum number of raw points before we bother checking for closure or continuation.
 const MIN_POINTS_TO_CLOSE = 15
 
-// Standard helper to turn the perfect-freehand outline (array of [x,y]) into an SVG path string.
-// Uses quadratic beziers for smooth curves between consecutive midpoints.
 function outlineToSvgPath(outline: number[][]): string {
   if (outline.length < 2) return ''
 
@@ -35,17 +33,41 @@ function outlineToSvgPath(outline: number[][]): string {
   return d.join(' ')
 }
 
-export function pointsToSvgPath(points: Point[]): string {
+// Used for live drawing preview — produces a variable-width brush stroke.
+export function pointsToStrokePath(points: Point[]): string {
   const input = points.map((p) => [p.x, p.y])
   const outline = getStroke(input, STROKE_OPTIONS)
   return outlineToSvgPath(outline)
 }
 
+// Used for finalized closed shapes — produces a smooth filled polygon directly
+// from the raw boundary points. Uses midpoint quadratic beziers so the fill
+// interior is clean. Intentionally bypasses perfect-freehand (which creates a
+// variable-width stroke outline, not a fillable polygon).
+export function pointsToFilledPath(points: Point[]): string {
+  if (points.length < 3) return ''
+  const n = points.length
+  // Start at the midpoint between the last and first point so the curve closes smoothly.
+  const startMid = { x: (points[n - 1].x + points[0].x) / 2, y: (points[n - 1].y + points[0].y) / 2 }
+  const d: (string | number)[] = ['M', startMid.x, startMid.y]
+  for (let i = 0; i < n; i++) {
+    const cur = points[i]
+    const next = points[(i + 1) % n]
+    const mid = { x: (cur.x + next.x) / 2, y: (cur.y + next.y) / 2 }
+    d.push('Q', cur.x, cur.y, mid.x, mid.y)
+  }
+  d.push('Z')
+  return d.join(' ')
+}
+
+// Legacy alias kept so any future callers compile without change.
+export const pointsToSvgPath = pointsToStrokePath
+
+export function dist(a: Point, b: Point): number {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
+}
+
 export function shouldCloseShape(points: Point[]): boolean {
   if (points.length < MIN_POINTS_TO_CLOSE) return false
-  const first = points[0]
-  const last = points[points.length - 1]
-  const dx = last.x - first.x
-  const dy = last.y - first.y
-  return Math.sqrt(dx * dx + dy * dy) < CLOSE_THRESHOLD_PX
+  return dist(points[0], points[points.length - 1]) < CLOSE_THRESHOLD_PX
 }
