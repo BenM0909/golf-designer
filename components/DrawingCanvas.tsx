@@ -331,6 +331,24 @@ export default function DrawingCanvas({
       }
     }
 
+    if (isDrawing.current && toolMode === 'erase' && eraseMode === 'pen') {
+      e.preventDefault()
+      const lastPt = currentPointsRef.current[currentPointsRef.current.length - 1] ?? pt
+      const nextShapes = shapes
+        .map(shape => {
+          const remaining = shape.rawPoints.filter(p => ptSegDist(p, lastPt, pt) >= ERASER_RADIUS)
+          if (remaining.length < 2) return null
+          return rebuildShape(shape, remaining, shape.isClosed)
+        })
+        .filter((s): s is Shape => s !== null)
+      onShapesChange(nextShapes)
+      setCurrentPoints(prev => {
+        if (prev.length > 0 && smoothDist(prev[prev.length - 1], pt) < MIN_DISTANCE_PX) return prev
+        return [...prev, pt]
+      })
+      return
+    }
+
     if (isDrawing.current) {
       e.preventDefault()
       setCurrentPoints(prev => {
@@ -343,7 +361,7 @@ export default function DrawingCanvas({
     if (toolMode === 'measure') {
       setSnapResult(findSnap(pt, shapes, objects))
     }
-  }, [getCanvasPoint, toolMode, eraseMode, shapes, objects])
+  }, [getCanvasPoint, toolMode, eraseMode, shapes, objects, onShapesChange])
 
   const handlePointerUp = useCallback((_e: React.PointerEvent) => {
     setPointerPos(null)
@@ -360,15 +378,6 @@ export default function DrawingCanvas({
     setCurrentPoints([])
 
     if (toolMode === 'erase' && eraseMode === 'pen') {
-      if (pts.length === 0) return
-      const nextShapes = shapes
-        .map(shape => {
-          const remaining = shape.rawPoints.filter(p => !isErasedByPath(p, pts))
-          if (remaining.length < 2) return null
-          return rebuildShape(shape, remaining, false)
-        })
-        .filter((s): s is Shape => s !== null)
-      onShapesChange(nextShapes)
       return
     }
 

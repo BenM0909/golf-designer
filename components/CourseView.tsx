@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Hole, CourseLayout } from '@/types/drawing'
 import { FILL_COLORS, OBJECT_COLORS } from '@/types/drawing'
 
@@ -13,10 +13,10 @@ interface Props {
 type Interaction =
   | { type: 'pan';    startPan: {x:number;y:number}; startPtr: {x:number;y:number} }
   | { type: 'move';   holeId: string; startPos: {x:number;y:number}; startPtr: {x:number;y:number} }
-  | { type: 'rotate'; holeId: string; startRot: number; pivot: {x:number;y:number}; startAngle: number }
+  | { type: 'rotate'; holeId: string; startRot: number; pivot: {x:number;y:number}; startAngle: number; localCenter: {x:number;y:number} }
 
 const HANDLE_R = 7
-const ROT_OFFSET = 32  // world px above bbox top for rotation handle
+const ROT_OFFSET = 32
 
 function localToWorld(lx: number, ly: number, l: CourseLayout) {
   const rad = l.rotation * Math.PI / 180
@@ -41,12 +41,40 @@ function holeBBox(hole: Hole) {
 export default function CourseView({ holes, layout, onLayoutChange }: Props) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [pan, setPan] = useState({ x: 80, y: 60 })
+  const [zoom, setZoom] = useState(1)
   const [livePan, setLivePan] = useState<{x:number;y:number}|null>(null)
   const [selectedId, setSelectedId] = useState<string|null>(null)
   const [ia, setIa] = useState<Interaction|null>(null)
   const [liveL, setLiveL] = useState<CourseLayout|null>(null)
 
-  const svgPt = useCallback((e: React.PointerEvent) => {
+  // Keep a ref so the wheel handler (registered once) always sees current values
+  const viewRef = useRef({ pan, zoom, livePan })
+  viewRef.current = { pan, zoom, livePan }
+
+  // Non-passive wheel listener so preventDefault() actually works
+  useEffect(() => {
+    const el = svgRef.current
+    if (!el) return
+    const handler = (e: WheelEvent) => {
+      e.preventDefault()
+      const { pan: p, zoom: z, livePan: lp } = viewRef.current
+      const r = el.getBoundingClientRect()
+      const ptr = { x: e.clientX - r.left, y: e.clientY - r.top }
+      const curPan = lp ?? p
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
+      const newZoom = Math.min(Math.max(z * factor, 0.08), 20)
+      // Keep the world point under the cursor fixed
+      setPan({
+        x: ptr.x - (ptr.x - curPan.x) * newZoom / z,
+        y: ptr.y - (ptr.y - curPan.y) * newZoom / z,
+      })
+      setZoom(newZoom)
+    }
+    el.addEventListener('wheel', handler, { passive: false })
+    return () => el.removeEventListener('wheel', handler)
+  }, [])
+
+  const svgPt = useCallback((e: { clientX: number; clientY: number }) => {
     const r = svgRef.current!.getBoundingClientRect()
     return { x: e.clientX - r.left, y: e.clientY - r.top }
   }, [])
@@ -56,8 +84,8 @@ export default function CourseView({ holes, layout, onLayoutChange }: Props) {
     e.stopPropagation()
     ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
     setSelectedId(null)
-    setIa({ type: 'pan', startPan: pan, startPtr: svgPt(e) })
-  }, [svgPt, pan])
+    setIa({ type: 'pan', startPan: livePan ?? pan, startPtr: svgPt(e) })
+  }, [svgPt, pan, livePan])
 
   const onHoleDown = useCallback((e: React.PointerEvent, holeId: string) => {
     if (e.button !== 0) return
@@ -79,13 +107,23 @@ export default function CourseView({ holes, layout, onLayoutChange }: Props) {
     const hole = holes.find(h => h.id === holeId)
     if (!hole) return
     const bbox = holeBBox(hole)
-    const pivot = localToWorld((bbox.minX + bbox.maxX) / 2, (bbox.minY + bbox.maxY) / 2, cl)
+    const bcx = (bbox.minX + bbox.maxX) / 2
+    const bcy = (bbox.minY + bbox.maxY) / 2
+    const pivot = localToWorld(bcx, bcy, cl)
     const curPan = livePan ?? pan
     const ptr = svgPt(e)
-    const pWorld = { x: ptr.x - curPan.x, y: ptr.y - curPan.y }
+    // Convert screen → world for angle calculation
+    const pWorld = { x: (ptr.x - curPan.x) / zoom, y: (ptr.y - curPan.y) / zoom }
     setLiveL({ ...cl })
-    setIa({ type: 'rotate', holeId, startRot: cl.rotation, pivot, startAngle: Math.atan2(pWorld.y - pivot.y, pWorld.x - pivot.x) })
-  }, [svgPt, holes, layout, liveL, livePan, pan])
+    setIa({
+      type: 'rotate',
+      holeId,
+      startRot: cl.rotation,
+      pivot,
+      startAngle: Math.atan2(pWorld.y - pivot.y, pWorld.x - pivot.x),
+      localCenter: { x: bcx, y: bcy },
+    })
+  }, [svgPt, holes, layout, liveL, livePan, pan, zoom])
 
   const onMove = useCallback((e: React.PointerEvent) => {
     if (!ia) return
@@ -101,13 +139,28 @@ export default function CourseView({ holes, layout, onLayoutChange }: Props) {
     if (!base) return
 
     if (ia.type === 'move') {
-      setLiveL({ ...base, x: ia.startPos.x + ptr.x - ia.startPtr.x, y: ia.startPos.y + ptr.y - ia.startPtr.y })
+      // Screen delta ÷ zoom = world delta
+      setLiveL({
+        ...base,
+        x: ia.startPos.x + (ptr.x - ia.startPtr.x) / zoom,
+        y: ia.startPos.y + (ptr.y - ia.startPtr.y) / zoom,
+      })
     } else if (ia.type === 'rotate') {
-      const pw = { x: ptr.x - curPan.x, y: ptr.y - curPan.y }
+      const pw = { x: (ptr.x - curPan.x) / zoom, y: (ptr.y - curPan.y) / zoom }
       const angle = Math.atan2(pw.y - ia.pivot.y, pw.x - ia.pivot.x)
-      setLiveL({ ...base, rotation: ia.startRot + (angle - ia.startAngle) * 180 / Math.PI })
+      const newRot = ia.startRot + (angle - ia.startAngle) * 180 / Math.PI
+      const rad = newRot * Math.PI / 180
+      const { x: bcx, y: bcy } = ia.localCenter
+      const s = base.scale
+      // Recompute x,y so that the bbox center stays at ia.pivot (rotation around visual center)
+      setLiveL({
+        ...base,
+        rotation: newRot,
+        x: ia.pivot.x - (bcx * s) * Math.cos(rad) + (bcy * s) * Math.sin(rad),
+        y: ia.pivot.y - (bcx * s) * Math.sin(rad) - (bcy * s) * Math.cos(rad),
+      })
     }
-  }, [ia, svgPt, layout, livePan, pan])
+  }, [ia, svgPt, layout, livePan, pan, zoom])
 
   const onUp = useCallback(() => {
     if (!ia) return
@@ -133,10 +186,10 @@ export default function CourseView({ holes, layout, onLayoutChange }: Props) {
         onPointerUp={onUp}
         onPointerLeave={onUp}
       >
-        <g transform={`translate(${displayPan.x},${displayPan.y})`}>
+        <g transform={`translate(${displayPan.x},${displayPan.y}) scale(${zoom})`}>
           {/* Infinite pannable background */}
           <rect
-            x={-10000} y={-10000} width={30000} height={30000}
+            x={-50000} y={-50000} width={150000} height={150000}
             fill="#e5ede0"
             style={{ cursor: ia?.type === 'pan' ? 'grabbing' : 'grab' }}
             onPointerDown={onBgDown}
@@ -150,6 +203,9 @@ export default function CourseView({ holes, layout, onLayoutChange }: Props) {
 
             const bbox = holeBBox(hole)
             const bcx = (bbox.minX + bbox.maxX) / 2
+            const bcy = (bbox.minY + bbox.maxY) / 2
+            // World-space positions for overlay and label
+            const labelPos = localToWorld(bcx, bcy, l)
             const corners = [
               localToWorld(bbox.minX, bbox.minY, l),
               localToWorld(bbox.maxX, bbox.minY, l),
@@ -158,6 +214,8 @@ export default function CourseView({ holes, layout, onLayoutChange }: Props) {
             ]
             const topCenter = localToWorld(bcx, bbox.minY, l)
             const rotHandle = localToWorld(bcx, bbox.minY - ROT_OFFSET / l.scale, l)
+            // Keep handle/stroke sizes constant on screen regardless of zoom
+            const px = 1 / zoom
 
             return (
               <g key={hole.id}>
@@ -167,6 +225,12 @@ export default function CourseView({ holes, layout, onLayoutChange }: Props) {
                   style={{ cursor: ia?.type === 'move' && ia.holeId === hole.id ? 'grabbing' : 'grab' }}
                   onPointerDown={e => onHoleDown(e, hole.id)}
                 >
+                  {/* Transparent hit area so drags register even over pointerEvents="none" shapes */}
+                  <rect
+                    x={bbox.minX} y={bbox.minY}
+                    width={bbox.maxX - bbox.minX} height={bbox.maxY - bbox.minY}
+                    fill="none" style={{ pointerEvents: 'all' }}
+                  />
                   {isEmpty && (
                     <rect x={0} y={0} width={440} height={440}
                       fill="rgba(255,255,255,0.3)" rx={8}
@@ -184,14 +248,6 @@ export default function CourseView({ holes, layout, onLayoutChange }: Props) {
                       }
                     </g>
                   ))}
-                  <text
-                    x={isEmpty ? 220 : 0} y={-16}
-                    fontSize={13} fontWeight="700" fill="#1e293b" fontFamily="sans-serif"
-                    textAnchor={isEmpty ? 'middle' : 'start'}
-                    pointerEvents="none"
-                  >
-                    H{hole.metadata.holeNumber} · Par {hole.metadata.par}
-                  </text>
                   {isEmpty && (
                     <text x={220} y={230} fontSize={11} fill="#94a3b8" fontFamily="sans-serif" textAnchor="middle" pointerEvents="none">
                       Draw in the Hole {hole.metadata.holeNumber} tab
@@ -199,22 +255,39 @@ export default function CourseView({ holes, layout, onLayoutChange }: Props) {
                   )}
                 </g>
 
-                {/* Selection overlay — world space, outside hole transform */}
+                {/* Label: world space so it's always upright, centered on hole content */}
+                <text
+                  x={labelPos.x}
+                  y={labelPos.y}
+                  fontSize={13 * px}
+                  fontWeight="700"
+                  fontFamily="sans-serif"
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fill="#1e293b"
+                  stroke="white"
+                  strokeWidth={3 * px}
+                  paintOrder="stroke fill"
+                  pointerEvents="none"
+                >
+                  H{hole.metadata.holeNumber} · Par {hole.metadata.par}
+                </text>
+
+                {/* Selection overlay — world space */}
                 {isSelected && (
                   <g>
                     <polygon
                       points={corners.map(c => `${c.x},${c.y}`).join(' ')}
-                      fill="none" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="5 3"
+                      fill="none" stroke="#3b82f6" strokeWidth={1.5 * px} strokeDasharray={`${5 * px} ${3 * px}`}
                       pointerEvents="none"
                     />
                     <line
                       x1={topCenter.x} y1={topCenter.y} x2={rotHandle.x} y2={rotHandle.y}
-                      stroke="#3b82f6" strokeWidth={1.5} pointerEvents="none"
+                      stroke="#3b82f6" strokeWidth={1.5 * px} pointerEvents="none"
                     />
-                    {/* Rotation handle */}
                     <circle
-                      cx={rotHandle.x} cy={rotHandle.y} r={HANDLE_R}
-                      fill="white" stroke="#3b82f6" strokeWidth={2}
+                      cx={rotHandle.x} cy={rotHandle.y} r={HANDLE_R * px}
+                      fill="white" stroke="#3b82f6" strokeWidth={2 * px}
                       style={{ cursor: 'crosshair' }}
                       onPointerDown={e => onRotateDown(e, hole.id)}
                     />
