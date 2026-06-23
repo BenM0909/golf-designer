@@ -1,9 +1,10 @@
 'use client'
 
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { Hole, CourseLayout } from '@/types/drawing'
 import DrawingCanvas from '@/components/DrawingCanvas'
 import CourseView from '@/components/CourseView'
+import { saveCourse, loadCourse } from '@/lib/courseDb'
 
 // ── State shape ────────────────────────────────────────────────────────────────
 
@@ -23,10 +24,12 @@ function makeLayout(holeId: string, index: number): CourseLayout {
   return { holeId, x: 60 + col * 680, y: 60 + row * 680, rotation: 0, scale: 1 }
 }
 
+const STORAGE_KEY = 'golf-designer-course-id'
+const AUTOSAVE_DELAY = 1500
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function Home() {
-  // useId() is stable across server/client renders — safe initial hole ID
   const baseId = useId()
   const initialHoleId = `${baseId}-h1`
 
@@ -36,7 +39,82 @@ export default function Home() {
     activeTab: initialHoleId,
   }))
 
-  const { holes, layout, activeTab } = state
+  const [courseId, setCourseId] = useState<string | null>(null)
+  const [courseName, setCourseName] = useState('My Course')
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [loading, setLoading] = useState(true)
+
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // ── Load on mount ──────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    const freshStart = () => {
+      const id = crypto.randomUUID()
+      const holeId = crypto.randomUUID()
+      localStorage.setItem(STORAGE_KEY, id)
+      setCourseId(id)
+      setState({
+        holes: [makeHole(holeId, 1)],
+        layout: [makeLayout(holeId, 0)],
+        activeTab: holeId,
+      })
+      setLoading(false)
+    }
+
+    const savedId = localStorage.getItem(STORAGE_KEY)
+    if (savedId) {
+      loadCourse(savedId)
+        .then(course => {
+          // If layout wasn't persisted, regenerate default positions so holes appear in CourseView
+          const layout = course.layout.length > 0
+            ? course.layout
+            : course.holes.map((h, i) => makeLayout(h.id, i))
+          setCourseId(course.id)
+          setCourseName(course.name)
+          setState({
+            holes: course.holes,
+            layout,
+            activeTab: course.holes[0]?.id ?? 'course',
+          })
+          setLoading(false)
+        })
+        .catch(freshStart)
+    } else {
+      freshStart()
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Auto-save (debounced) ──────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (loading || !courseId) return
+
+    setSaveStatus('saving')
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    if (clearTimerRef.current) clearTimeout(clearTimerRef.current)
+
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        await saveCourse({
+          id: courseId,
+          name: courseName,
+          holes: state.holes,
+          layout: state.layout,
+        })
+        setSaveStatus('saved')
+        clearTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000)
+      } catch (err) {
+        console.error('Auto-save failed:', err)
+        setSaveStatus('error')
+      }
+    }, AUTOSAVE_DELAY)
+
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    }
+  }, [state, courseName, courseId, loading])
 
   // ── Hole data updaters ─────────────────────────────────────────────────────
 
@@ -58,6 +136,7 @@ export default function Home() {
       }
     })
 
+  const { holes, layout, activeTab } = state
   const activeHole = holes.find(h => h.id === activeTab)
 
   // ── Tab bar class helpers ──────────────────────────────────────────────────
@@ -69,9 +148,19 @@ export default function Home() {
         : 'border-transparent text-stone-500 bg-stone-100 hover:text-stone-700 hover:bg-stone-50'
     }`
 
+  // ── Loading overlay ────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-stone-50 text-stone-400 text-sm">
+        Loading…
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col h-screen select-none">
-      {/* ── Main content (fills all space above the tab bar) ─────────────────── */}
+      {/* ── Main content ─────────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-h-0">
         {activeTab === 'course' ? (
           <CourseView
@@ -90,6 +179,9 @@ export default function Home() {
             onObjectsChange={objects => updateHole(activeHole.id, { objects })}
             onMeasurementsChange={measurements => updateHole(activeHole.id, { measurements })}
             onHoleMetadataChange={metadata => updateHole(activeHole.id, { metadata })}
+            courseName={courseName}
+            onCourseNameChange={setCourseName}
+            saveStatus={saveStatus}
           />
         ) : null}
       </div>

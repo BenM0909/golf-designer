@@ -650,18 +650,16 @@ export default function DrawingCanvas({
           <span className="text-xs text-stone-500 ml-1">{FILL_LABELS[activeFill]}</span>
         </div>
 
-        {/* Save / Load — shown only when wired up by parent */}
-        {(onSave || onLoadOpen) && (
+        {/* Course name + auto-save status */}
+        {onCourseNameChange && (
           <div className="flex items-center gap-1 border-l border-stone-200 pl-3 ml-1">
-            {onCourseNameChange && (
-              <input
-                value={courseName}
-                onChange={e => onCourseNameChange(e.target.value)}
-                onPointerDown={e => e.stopPropagation()}
-                className="text-xs border border-stone-200 rounded px-2 py-1 w-28 focus:outline-none focus:border-slate-400"
-                placeholder="Course name"
-              />
-            )}
+            <input
+              value={courseName}
+              onChange={e => onCourseNameChange(e.target.value)}
+              onPointerDown={e => e.stopPropagation()}
+              className="text-xs border border-stone-200 rounded px-2 py-1 w-28 focus:outline-none focus:border-slate-400"
+              placeholder="Course name"
+            />
             {onSave && <button onClick={onSave} className={toolBtnClass(false) + ' text-xs'}>Save</button>}
             {onLoadOpen && <button onClick={onLoadOpen} className={toolBtnClass(false) + ' text-xs'}>Load</button>}
             {saveStatus === 'saving' && <span className="text-xs text-stone-400">Saving…</span>}
